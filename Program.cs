@@ -1,3 +1,4 @@
+using graphical_console_exporter;
 using OpenTelemetry;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
@@ -10,7 +11,7 @@ builder.Services.AddOpenTelemetryTracing(b =>
 {
     b
     .AddSource("Test")
-    .AddProcessor(new SimpleActivityExportProcessor(new graphical_console_exporter.GraphicalConsoleExporter()))
+    .AddProcessor(new SimpleActivityExportProcessor(new GraphicalConsoleExporter()))
     .SetResourceBuilder(
         ResourceBuilder.CreateDefault()
             .AddService(serviceName: "graphical-exporter", serviceVersion: "1.0.0"))

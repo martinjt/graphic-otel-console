@@ -2,24 +2,39 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using OpenTelemetry;
 using Spectre.Console;
-using System.Linq;
 
 namespace graphical_console_exporter;
 
 public class GraphicalConsoleExporter : BaseExporter<Activity>
 {
     private readonly ConcurrentDictionary<string, InternalTrace> _traces = new ConcurrentDictionary<string, InternalTrace>();
-    private Timer _trigger;
+    private Timer? _trigger;
 
-    public GraphicalConsoleExporter()
+    public GraphicalConsoleExporter(
+        int startupDelayInMilliseconds = 1000, 
+        int pollingIntervalForWritingTraces = 3000,
+        bool disableAutoWrite = false)
     {
-        _trigger = new Timer(new TimerCallback(WriteTracesToConsole),
-        _traces,
-        5000,
-        30000);
+        if (!disableAutoWrite)
+            _trigger = new Timer(new TimerCallback(WriteAllTracesToConsole),
+                _traces,
+                startupDelayInMilliseconds,
+                pollingIntervalForWritingTraces);
     }
 
-    private static void WriteTracesToConsole(object? state)
+    public void WriteTraceById(string traceId)
+    {
+        if (_traces == null ||
+            !_traces.TryRemove(traceId, out InternalTrace? trace))
+            {
+                Console.WriteLine("No trace by that name");
+                return;
+            }
+
+        WriteInternalTraceToConsole(trace);
+    }
+
+    private static void WriteAllTracesToConsole(object? state)
     {
         var traces = state as ConcurrentDictionary<string, InternalTrace>;
         if (traces == null)
@@ -42,45 +57,38 @@ public class GraphicalConsoleExporter : BaseExporter<Activity>
         table.Title = new TableTitle($"[bold]TraceId:[/] [yellow]{trace.TraceId}[/]");
         
         table.Expand();
-        table.AddColumn("Service", o => {
-            o.Width = 3;
+        table.AddColumn("Name", o => {
+            o.Width = 8;
         });
-        table.AddColumn("Span", o => {
-            o.Width = 5;
-        });
+        table.AddColumn("Duration (ms)");
         table.AddColumn("");
-        // var newList = new List<Activity>();
-        // newList.AddRange(newList);
-
-        // var orderedList = 
 
         var indentList = new Dictionary<string, int>();
-        Activity rootSpan = null; 
+        Activity? rootSpan = null; 
         int rootSpanLength = 0;
         foreach(var span in trace.Activities.OrderBy(a => a.StartTimeUtc).ToList())
         {
             var spanString = "";
             if (span.ParentId == null)
             {
-                rootSpanLength = trace.Activities.Count < 30 ? 30 : trace.Activities.Count;
+                rootSpanLength = trace.Activities.Count < 50 ? 50 : trace.Activities.Count;
                 rootSpan = span;
-                spanString.PadRight(rootSpanLength);
-                table.AddRow(span.Source.Name, $"{span.DisplayName}", "[white on yellow]" + spanString + "[/]");
+                table.AddRow(span.DisplayName.Truncate(30), span.Duration.Milliseconds.ToString(), "[yellow on yellow]" + "".PadRight(rootSpanLength, ' ') + "[/]");
                 continue;
             }
 
-            double millisecondsPerBlock = rootSpan?.Duration.Milliseconds ?? 0 / rootSpanLength;
+            var rootSpanDuration = rootSpan?.Duration.Milliseconds ?? 0;
+            double millisecondsPerBlock = rootSpanDuration / rootSpanLength;
 
             var spanOffsetFromRootMilliseconds = span.StartTimeUtc - rootSpan?.StartTimeUtc;
+            var spanMilliseconds = spanOffsetFromRootMilliseconds?.Milliseconds ?? 0;
 
-            var blocksToWriteForPadding = (int)Math.Ceiling(spanOffsetFromRootMilliseconds?.Milliseconds ?? 0/ millisecondsPerBlock);
+            var blocksToWriteForPadding = (int)Math.Round(spanMilliseconds / millisecondsPerBlock);
             var blocksToWriteForSpan = (int)Math.Round(span.Duration.Milliseconds / millisecondsPerBlock);
             var blocksToWriteForEnd = rootSpanLength - blocksToWriteForPadding - blocksToWriteForSpan;
             
-            spanString.PadRight(blocksToWriteForSpan);
-
-            table.AddRow(span.Source.Name, $"{span.DisplayName}", 
-                new char[blocksToWriteForPadding] + $"[black on green]{spanString}[/]" + new char[blocksToWriteForEnd]);
+            table.AddRow(span.DisplayName.Truncate(30), span.Duration.Milliseconds.ToString(),
+                "".PadRight(blocksToWriteForPadding) + $"[green on green]{spanString.PadRight(blocksToWriteForSpan, ' ')}[/]" + "".PadRight(blocksToWriteForEnd));
 
         }
         AnsiConsole.Write(table);
@@ -112,6 +120,17 @@ public class GraphicalConsoleExporter : BaseExporter<Activity>
 
 public class InternalTrace
 {
-    public string TraceId { get; init; }
+    public string TraceId { get; init; } = null!;
     public List<Activity> Activities { get; set; } = new List<Activity>();
+}
+
+public static class StringExtensions
+{
+    public static string Truncate(this string input, int maxLength)
+    {
+        if (input.Length > maxLength)
+            return input.Substring(0, maxLength - 3) + "...";
+
+        return input;
+    }
 }
